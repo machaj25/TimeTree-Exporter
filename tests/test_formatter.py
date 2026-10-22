@@ -97,12 +97,12 @@ def test_to_ical_includes_comments(normal_event_data):
     event = TimeTreeEvent.from_dict(data)
     formatter = ICalEventFormatter(event)
 
-    assert formatter.description == "測試備註"
+    assert formatter.description == "Test note"
     assert formatter.comments == ["First comment", "Second comment"]
 
     ical_event = formatter.to_ical()
 
-    assert ical_event["description"] == "測試備註"
+    assert ical_event["description"] == "Test note"
     assert ical_event["comment"] == ["First comment", "Second comment"]
 
 

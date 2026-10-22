@@ -14,11 +14,11 @@ def normal_event_data():
     """Fixture for normal event data."""
     return {
         "uuid": "test-uuid-normal",
-        "title": "測試一般活動",
+        "title": "Test normal event (café)",
         "created_at": 1713110000000,  # Unix timestamp in milliseconds
         "updated_at": 1713110100000,  # Unix timestamp in milliseconds
-        "note": "測試備註",
-        "location": "測試地點",
+        "note": "Test note",
+        "location": "Test location",
         "location_lat": "25.0335",
         "location_lon": "121.5645",
         "url": "https://example.com",
@@ -41,7 +41,7 @@ def birthday_event_data():
     """Fixture for birthday event data."""
     return {
         "uuid": "test-uuid-birthday",
-        "title": "測試生日活動",
+        "title": "Test birthday event",
         "created_at": 1713110000000,
         "updated_at": 1713110100000,
         "note": "",
@@ -68,10 +68,10 @@ def memo_event_data():
     """Fixture for memo event data."""
     return {
         "uuid": "test-uuid-memo",
-        "title": "測試備忘錄",
+        "title": "Test memo",
         "created_at": 1713110000000,
         "updated_at": 1713110100000,
-        "note": "備忘內容",
+        "note": "Memo content",
         "location": "",
         "location_lat": None,
         "location_lon": None,
@@ -95,7 +95,7 @@ def labeled_event_data():
     """Fixture for event data with a label_id."""
     return {
         "uuid": "test-uuid-labeled",
-        "title": "測試有標籤活動",
+        "title": "Test labeled event",
         "created_at": 1713110000000,
         "updated_at": 1713110100000,
         "note": "",
@@ -123,7 +123,7 @@ def relationship_label_event_data():
     """Fixture for event data with label in relationships format."""
     return {
         "uuid": "test-uuid-rel-label",
-        "title": "測試關係標籤活動",
+        "title": "Test relationship label event",
         "created_at": 1713110000000,
         "updated_at": 1713110100000,
         "note": "",
@@ -160,11 +160,11 @@ def temp_event_file():
         "events": [
             {
                 "uuid": "test-uuid-1",
-                "title": "測試活動 1",
+                "title": "Test event 1",
             },
             {
                 "uuid": "test-uuid-2",
-                "title": "測試活動 2",
+                "title": "Test event 2",
             },
         ]
     }
@@ -175,7 +175,7 @@ def temp_event_file():
 
     yield temp_file_path
 
-    # 測試後清理
+    # Clean up after the test
     Path(temp_file_path).unlink()
 
 
@@ -186,11 +186,11 @@ def temp_public_event_file():
         "public_events": [
             {
                 "uuid": "test-uuid-1",
-                "title": "公開測試活動 1",
+                "title": "Public test event 1",
             },
             {
                 "uuid": "test-uuid-2",
-                "title": "公開測試活動 2",
+                "title": "Public test event 2",
             },
         ]
     }
@@ -201,7 +201,7 @@ def temp_public_event_file():
 
     yield temp_file_path
 
-    # 測試後清理
+    # Clean up after the test
     Path(temp_file_path).unlink()
 
 
@@ -216,7 +216,7 @@ def temp_invalid_file():
 
     yield temp_file_path
 
-    # 測試後清理
+    # Clean up after the test
     Path(temp_file_path).unlink()
 
 
@@ -224,7 +224,7 @@ def temp_invalid_file():
 def temp_directory():
     """Create a temporary directory with multiple files for testing."""
     with tempfile.TemporaryDirectory() as temp_dir:
-        # 在臨時目錄中創建一些文件
+        # Create a few files in the temporary directory
         for i in range(3):
             file_path = Path(temp_dir) / f"file_{i}.txt"
             file_path.write_text(f"Content of file {i}", encoding="utf-8")
