@@ -22,7 +22,15 @@ Run all hooks manually:
 uv run pre-commit run --all-files
 ```
 
-The hooks run Ruff linting and formatting for Python files, plus basic whitespace, EOF, and YAML checks.
+The hooks run Ruff linting and formatting and mypy type checking for Python files, plus basic whitespace, EOF, and YAML checks.
+
+## Lint and Type-Check
+
+```bash
+uv run ruff check
+uv run ruff format --check
+uv run mypy
+```
 
 ## Test
 
@@ -44,6 +52,7 @@ Useful environment variables:
 
 - `TIMETREE_EMAIL`: TimeTree account email.
 - `TIMETREE_PASSWORD`: TimeTree account password.
+- `TIMETREE_SESSION_ID`: Existing `_session_id` web cookie; skips sign-in when set.
 - `TIMETREE_EXPORTER_DEVELOPER=1`: Enable raw API response output for diagnostics.
 
 ## Developer Diagnostics
@@ -85,6 +94,13 @@ Useful public calendar checks:
 uv run pytest tests/test_calendar.py tests/test_event.py tests/test_main.py
 uv run ruff check
 ```
+
+### HTTP Layer
+
+- All API calls go through `TimeTreeCalendar._get`, which adds the standard headers and a `(connect, read)` timeout from `api/const.py`.
+- Sessions are built by `api/session.py` with a `urllib3.Retry` policy: GET requests are retried with exponential backoff on 429/5xx and `Retry-After` is honoured. Login (PUT) is never retried automatically.
+- The events sync endpoint (`/api/v1/calendar/{calendar_id}/events/sync`) is paginated with `chunk: true` and a `since` cursor. `_fetch_event_pages` follows the pages iteratively and returns an `EventPage` with active events, UUIDs of deactivated (deleted) events, and the final cursor.
+- `--sync-state` persists that cursor and the known events per calendar in `sync_state.py`; later runs call `get_events_since(since)` and merge updates and tombstones before regenerating the ICS.
 
 ### Activity Endpoint (Comments)
 
@@ -131,7 +147,7 @@ Private TimeTree event fields:
 - [x] **URL** -> `URL`
 - [x] **Note** -> `DESCRIPTION`
 - [ ] **Lunar** -> possible RFC 7529 `RRULE` `RSCALE=...` / `SKIP=...` for lunar or other non-Gregorian recurrence rules; requires confirming TimeTree lunar recurrence semantics
-- [ ] **Attendees** -> possible `ATTENDEE` with params such as `CN`, `CUTYPE`, `ROLE`, `PARTSTAT`, `RSVP`, and RFC 7986 `EMAIL`; requires usable calendar-user addresses
+- [x] **Attendees** -> opt-in (`--include-attendees`) `ATTENDEE` with `CN`, `CUTYPE=INDIVIDUAL`, `ROLE=REQ-PARTICIPANT` and a `urn:x-timetree:user:<id>` address; TimeTree provides no e-mail addresses, so `PARTSTAT`, `RSVP` and RFC 7986 `EMAIL` are not available
 - [x] **Recurrences** -> `RRULE`, `RDATE`, or `EXDATE`; recurrence parameters are preserved, and date-only timed-event `RRULE` `UNTIL` values are converted to UTC end-of-day
 - [x] **Recurring UUID** -> `RELATED-TO` when present; this is the recurring master event `uuid` for detached recurrence instances and matches the exported parent `UID`; possible future `RECURRENCE-ID` support when paired with the master's `EXDATE`/original occurrence timestamp
 - [x] **Alerts** -> `VALARM` with `ACTION:DISPLAY`, `DESCRIPTION:Reminder`, and relative `TRIGGER`
@@ -142,7 +158,7 @@ Private TimeTree event fields:
 - [ ] **Attachment** -> possible `ATTACH;VALUE=URI`, `ATTACH;FMTTYPE=...;ENCODING=BASE64;VALUE=BINARY`, or RFC 9073 `STRUCTURED-DATA` with `VALUE`, `FMTTYPE`, and `SCHEMA` params
 - [ ] ~~**Like Count**~~ (Not mapped; social metric has no iCalendar equivalent)
 - [ ] **Files** -> possible repeated `ATTACH;VALUE=URI` or binary `ATTACH` with `FMTTYPE`, `ENCODING=BASE64`, and `VALUE=BINARY`
-- [ ] **Deactivated At** -> possible future sync-state tombstone handling after initial sync, such as web client updates from `/api/v1/calendar/{calendar_id}/events`; not a normal ICS event property
+- [x] **Deactivated At** -> tombstone handling: deactivated events are excluded from exports and removed from the `--sync-state` store on incremental runs; not a normal ICS event property
 - [ ] ~~**Pinned At**~~ (Not mapped; TimeTree-specific UI metadata)
 - [x] **Updated At** -> `LAST-MODIFIED`
 - [x] **Created At** -> `CREATED`

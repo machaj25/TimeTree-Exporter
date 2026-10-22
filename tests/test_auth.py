@@ -71,3 +71,60 @@ def test_login_unknown_error_code_raises_base_error(monkeypatch):
 
     with pytest.raises(AuthenticationError):
         login("user@example.com", "password")
+
+
+def test_login_without_session_cookie_raises(monkeypatch):
+    """A 200 without the session cookie is still a failed login."""
+
+    def _mock_put(*args, **kwargs):
+        return MockResponse(status_code=200, json_body={}, text="{}", cookies={})
+
+    monkeypatch.setattr("timetree_exporter.api.auth.requests.put", _mock_put)
+
+    with pytest.raises(AuthenticationError, match="no session cookie"):
+        login("user@example.com", "password")
+
+
+def test_login_returns_session_cookie_and_sends_timeout(monkeypatch):
+    captured = {}
+
+    def _mock_put(url, **kwargs):
+        captured.update(kwargs)
+        return MockResponse(status_code=200, cookies={"_session_id": "sid-123"})
+
+    monkeypatch.setattr("timetree_exporter.api.auth.requests.put", _mock_put)
+
+    assert login("user@example.com", "password") == "sid-123"
+    assert captured["timeout"] == (10, 30)
+    assert captured["json"]["uid"] == "user@example.com"
+
+
+def test_login_failure_does_not_log_response_body_at_error_level(monkeypatch, caplog):
+    """The body can echo the account email, so it must only appear at DEBUG level."""
+
+    def _mock_put(*args, **kwargs):
+        return MockResponse(
+            status_code=401,
+            json_body={"error": {"code": -702, "email": "user@example.com"}},
+            text='{"error":{"code":-702,"email":"user@example.com"}}',
+        )
+
+    monkeypatch.setattr("timetree_exporter.api.auth.requests.put", _mock_put)
+
+    with caplog.at_level("ERROR"), pytest.raises(InvalidCredentialsError):
+        login("user@example.com", "wrong-pass")
+
+    assert "user@example.com" not in caplog.text
+    assert "-702" in caplog.text
+
+
+def test_login_network_error_is_authentication_error(monkeypatch):
+    import requests
+
+    def _mock_put(*args, **kwargs):
+        raise requests.ConnectionError("boom")
+
+    monkeypatch.setattr("timetree_exporter.api.auth.requests.put", _mock_put)
+
+    with pytest.raises(AuthenticationError, match="Could not reach TimeTree"):
+        login("user@example.com", "password")

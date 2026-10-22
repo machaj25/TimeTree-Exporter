@@ -3,6 +3,8 @@
 
 # Python temporary files
 *.pyc
+.mypy_cache/
+.coverage
 
 # Python environment
 .venv
@@ -16,6 +18,7 @@ dist
 
 # TimeTree
 timetree.ics
+timetree-sync.json
 
 # Raw TimeTree API responses (developer mode)
 raw-timetree*/

@@ -481,3 +481,52 @@ def test_different_timezones(normal_event_data):
     ical_event = formatter.to_ical()
     assert ical_event["dtstart"].dt.tzinfo.key == "America/New_York"
     assert ical_event["dtend"].dt.tzinfo.key == "Asia/Tokyo"
+
+
+def test_formatter_adds_attendees_with_names(normal_event_data):
+    """Attendees are exported as ATTENDEE with a TimeTree user URN and CN."""
+    data = {**normal_event_data, "attendees": [10, {"user_id": 11}]}
+    event = TimeTreeEvent.from_dict(data)
+    assert event.attendees == [10, 11]
+
+    formatter = ICalEventFormatter(
+        event, attendees=[{"id": 10, "name": "Alice"}, {"id": 11, "name": None}, {"id": None}]
+    )
+    serialized = formatter.to_ical().to_ical().decode("utf-8").replace("\r\n ", "")
+
+    assert "urn:x-timetree:user:10" in serialized
+    assert "urn:x-timetree:user:11" in serialized
+    assert "CN=Alice" in serialized
+    assert serialized.count("ATTENDEE") == 2
+    assert "ROLE=REQ-PARTICIPANT" in serialized
+
+
+def test_formatter_without_attendees_emits_none(normal_event_data):
+    formatter = ICalEventFormatter(TimeTreeEvent.from_dict(normal_event_data))
+
+    assert b"ATTENDEE" not in formatter.to_ical().to_ical()
+
+
+def test_formatter_skips_events_without_times(normal_event_data, caplog):
+    """Events without a start or end cannot be placed and are skipped with a warning."""
+    data = {**normal_event_data, "end_at": None}
+
+    assert ICalEventFormatter(TimeTreeEvent.from_dict(data)).to_ical() is None
+    assert "Skipping event without start or end time" in caplog.text
+
+
+def test_formatter_tolerates_missing_timezone_and_timestamps(normal_event_data):
+    """Missing timezone falls back to UTC; missing CREATED/LAST-MODIFIED are omitted."""
+    data = {
+        **normal_event_data,
+        "start_timezone": None,
+        "end_timezone": None,
+        "created_at": None,
+        "updated_at": None,
+    }
+
+    serialized = ICalEventFormatter(TimeTreeEvent.from_dict(data)).to_ical().to_ical()
+
+    assert b"DTSTART:20240414T" in serialized  # UTC fallback
+    assert b"CREATED" not in serialized
+    assert b"LAST-MODIFIED" not in serialized

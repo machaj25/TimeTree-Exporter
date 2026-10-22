@@ -1,0 +1,62 @@
+# Example GitHub Actions workflow that exports a TimeTree calendar every night
+# and publishes the .ics file as a workflow artifact.
+#
+# Copy this file to .github/workflows/ in your own repository and add the
+# TIMETREE_EMAIL and TIMETREE_PASSWORD (or TIMETREE_SESSION_ID) secrets in the
+# repository settings, plus a TIMETREE_CALENDAR_CODE repository variable with the
+# calendar code to export. Keep the schedule modest: every run signs in to TimeTree
+# and downloads the whole calendar unless --sync-state is used with a cached
+# state file, as shown below.
+name: Export TimeTree calendar
+
+on:
+  schedule:
+    - cron: "17 3 * * *" # daily at 03:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install timetree-exporter
+        run: pip install timetree-exporter
+
+      # Restore the sync state from the previous run so only changes are fetched.
+      - name: Restore sync state
+        uses: actions/cache/restore@v4
+        with:
+          path: state/timetree-sync.json
+          key: timetree-sync-${{ github.run_id }}
+          restore-keys: timetree-sync-
+
+      - name: Export calendar
+        env:
+          TIMETREE_EMAIL: ${{ secrets.TIMETREE_EMAIL }}
+          TIMETREE_PASSWORD: ${{ secrets.TIMETREE_PASSWORD }}
+        run: |
+          mkdir -p export state
+          timetree-exporter \
+            -c "${{ vars.TIMETREE_CALENDAR_CODE }}" \
+            -o export/timetree.ics \
+            --sync-state state/timetree-sync.json
+
+      - name: Save sync state
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: state/timetree-sync.json
+          key: timetree-sync-${{ github.run_id }}
+
+      - name: Upload .ics
+        uses: actions/upload-artifact@v4
+        with:
+          name: timetree-ics
+          path: export/
+          retention-days: 7
