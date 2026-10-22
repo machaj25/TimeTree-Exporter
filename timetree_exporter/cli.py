@@ -4,6 +4,7 @@ import argparse
 import logging
 import os
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
 from timetree_exporter import __version__
@@ -16,19 +17,29 @@ from timetree_exporter.utils import safe_getpass
 
 package_logger = logging.getLogger(__package__)
 
+EMAIL_ENV = "TIMETREE_EMAIL"
+PASSWORD_ENV = "TIMETREE_PASSWORD"
+SESSION_ID_ENV = "TIMETREE_SESSION_ID"
+
 __all__ = [
     "DEVELOPER_MODE_ENV",
+    "EMAIL_ENV",
+    "PASSWORD_ENV",
     "RAW_OUTPUT_DIR",
+    "SESSION_ID_ENV",
     "configure_logging",
     "list_labels_and_exit",
+    "output_path_for_calendar",
     "parse_args",
+    "parse_calendar_codes",
     "raw_output_dir",
     "resolve_email",
     "resolve_password",
+    "resolve_session_id",
 ]
 
 
-def parse_args():
+def parse_args(argv: Sequence[str] | None = None):
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(
         description="Convert Timetree events to iCal format",
@@ -51,14 +62,26 @@ def parse_args():
         "-e",
         "--email",
         type=str,
-        help="Email address",
+        help=f"Email address (or set {EMAIL_ENV})",
+        default=None,
+    )
+    parser.add_argument(
+        "--session-id",
+        type=str,
+        help=(
+            "Reuse an existing TimeTree web session cookie (_session_id) instead of "
+            f"signing in with email and password (or set {SESSION_ID_ENV})"
+        ),
         default=None,
     )
     parser.add_argument(
         "-c",
         "--calendar_code",
         type=str,
-        help="The Calendar Code you want to export, or public calendar id with --public-calendar",
+        help=(
+            "The Calendar Code(s) you want to export, comma-separated for several calendars, "
+            "or a public calendar id with --public-calendar"
+        ),
         default=None,
     )
     parser.add_argument(
@@ -82,6 +105,32 @@ def parse_args():
         action="store_true",
     )
     parser.add_argument(
+        "--from",
+        dest="date_from",
+        metavar="YYYY-MM-DD",
+        type=str,
+        help="Only export events ending on or after this date (in the event's timezone)",
+        default=None,
+    )
+    parser.add_argument(
+        "--to",
+        dest="date_to",
+        metavar="YYYY-MM-DD",
+        type=str,
+        help="Only export events starting on or before this date (in the event's timezone)",
+        default=None,
+    )
+    parser.add_argument(
+        "--sync-state",
+        metavar="FILE",
+        type=str,
+        help=(
+            "JSON file that remembers the last sync cursor and known events, so repeated "
+            "runs only fetch changes from TimeTree (private calendars only)"
+        ),
+        default=None,
+    )
+    parser.add_argument(
         "--include-comments",
         help=(
             "Export private event comments. This makes one or more extra TimeTree requests "
@@ -94,6 +143,15 @@ def parse_args():
         help=(
             "Export images attached to private event activities. This makes extra TimeTree "
             "requests per event and may take much longer."
+        ),
+        action="store_true",
+    )
+    parser.add_argument(
+        "--include-attendees",
+        help=(
+            "Export private event attendees as ATTENDEE properties. TimeTree only provides "
+            "internal user ids, so addresses use urn:x-timetree:user:<id> with the member "
+            "name in CN."
         ),
         action="store_true",
     )
@@ -117,14 +175,14 @@ def parse_args():
         help="Directory for developer-mode raw TimeTree API JSON responses",
         default=None,
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def resolve_email(cli_email):
     """Resolve email from CLI arg, env var, or prompt."""
     if cli_email:
         return cli_email
-    env_email = os.environ.get("TIMETREE_EMAIL")
+    env_email = os.environ.get(EMAIL_ENV)
     if env_email:
         return env_email
     return input("Enter your email address: ")
@@ -132,10 +190,24 @@ def resolve_email(cli_email):
 
 def resolve_password():
     """Resolve password from env var or prompt."""
-    env_password = os.environ.get("TIMETREE_PASSWORD")
+    env_password = os.environ.get(PASSWORD_ENV)
     if env_password:
         return env_password
     return safe_getpass(prompt="Enter your password: ", echo_char="*")
+
+
+def resolve_session_id(cli_session_id):
+    """Resolve an existing session id from the CLI arg or env var, if any."""
+    if cli_session_id:
+        return cli_session_id
+    return os.environ.get(SESSION_ID_ENV) or None
+
+
+def parse_calendar_codes(value):
+    """Split a comma-separated calendar code list into a list of codes."""
+    if not value:
+        return []
+    return [code.strip() for code in value.split(",") if code.strip()]
 
 
 def configure_logging(verbose):
@@ -147,6 +219,27 @@ def configure_logging(verbose):
 def raw_output_dir(args):
     """Return the raw response output directory for parsed CLI args."""
     return resolve_raw_output_dir(args.developer_mode, args.raw_output_dir)
+
+
+def _sanitize_component(name):
+    return re.sub(r"[^\w\-]", "_", str(name)).strip("_")
+
+
+def output_path_for_calendar(output, calendar, multiple):
+    """Return the output path for one calendar.
+
+    When several calendars are exported in one run, each gets its own file named
+    after the calendar so the exports do not overwrite each other.
+    """
+    output_path = Path(output)
+    if not multiple:
+        return output_path
+    suffix = _sanitize_component(calendar.name or "") or _sanitize_component(
+        calendar.alias_code or calendar.id
+    )
+    if output_path.suffix:
+        return output_path.with_name(f"{output_path.stem}_{suffix}{output_path.suffix}")
+    return output_path.with_name(f"{output_path.name}_{suffix}.ics")
 
 
 def list_labels_and_exit(calendar):

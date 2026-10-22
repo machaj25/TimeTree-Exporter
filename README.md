@@ -1,7 +1,5 @@
 # TimeTree Exporter
 
-[English](README.md) | [繁體中文](README.zh-tw.md)
-
 [![PyPI](https://img.shields.io/pypi/v/timetree-exporter.svg)](https://pypi.org/project/timetree-exporter/)
 [![Python 3.x](https://img.shields.io/pypi/pyversions/timetree-exporter.svg?logo=python&logoColor=white)](https://pypi.org/project/timetree-exporter/)
 [![License](https://img.shields.io/github/license/eoleedi/TimeTree-Exporter)](https://github.com/eoleedi/TimeTree-Exporter/blob/main/LICENSE)
@@ -69,11 +67,35 @@ Then, you can import the ics file to your calendar app.
 
   Note: Public calendar events use TimeTree's public API and may not include labels, alerts, recurrences, or UUIDs.
   Public calendar metadata such as source links, images, and colors is exported with RFC 7986 properties like `SOURCE`, `IMAGE`, and `COLOR` when available. Calendar apps that only implement RFC 5545 may ignore these optional fields.
+- Export several calendars in one run by passing a comma-separated list of codes, or answer the interactive prompt with `1,3` or `all`. Each calendar is written to its own file named after the calendar (e.g. `timetree_Family.ics`).
+
+  ```bash
+  timetree-exporter -c family_code,work_code -o timetree.ics
+  ```
+- Limit the export to a date range with `--from` and `--to` (inclusive, `YYYY-MM-DD`, evaluated in each event's own timezone). Recurring events that start before `--from` are kept because later occurrences may fall inside the range.
+
+  ```bash
+  timetree-exporter --from 2024-01-01 --to 2024-12-31
+  ```
+- Make repeated exports incremental with `--sync-state`. The JSON file remembers TimeTree's sync cursor and the events seen so far, so the next run only downloads changes (including deletions) and still writes a complete `.ics`. Delete the file to force a full export. Private calendars only.
+
+  ```bash
+  timetree-exporter -c calendar_code --sync-state ~/.timetree/sync.json
+  ```
 - You can pass your email address and password with environment variables. (usually for automation purposes)
 
   ```bash
   export TIMETREE_EMAIL=email@example.com
   export TIMETREE_PASSWORD=password
+  ```
+
+  > [!Tip]
+  > Prefer the interactive password prompt when running by hand: values exported in a shell end up in the shell history and are visible to every process in that session.
+- Reuse an existing browser session instead of typing your password into the tool. Sign in at [timetreeapp.com](https://timetreeapp.com), copy the value of the `_session_id` cookie from your browser's developer tools, and pass it with `--session-id` or `TIMETREE_SESSION_ID`. The exporter then never sees your password.
+
+  ```bash
+  export TIMETREE_SESSION_ID=paste_cookie_value_here
+  timetree-exporter -c calendar_code
   ```
 - Create separate ICS files for each label with a custom output directory.
 
@@ -101,6 +123,7 @@ Then, you can import the ics file to your calendar app.
   > [!Caution]
   > This option is disabled by default because it makes one or more extra TimeTree requests per event. It can be slow for large calendars and may trigger TimeTree rate limits.
   >
+  > Comments and images in a shared calendar were written by **all** of its members, not only you. Check with them before exporting or sharing such a file.
 - Include images attached to private events.
 
   ```bash
@@ -111,6 +134,41 @@ Then, you can import the ics file to your calendar app.
   `timetree_images.json` file maps each image to its event UUID, title, start date, object key,
   and relative path. Existing image files are skipped, so the export can be run again safely.
   This option applies only to private calendars and makes additional activity and image requests.
+
+- Include event attendees.
+
+  ```bash
+  timetree-exporter --include-attendees
+  ```
+
+  TimeTree only exposes attendees as internal user ids, so each `ATTENDEE` uses a `urn:x-timetree:user:<id>` address with the member's display name in `CN`. Some calendar apps ignore attendees without an e-mail address, which is why this is opt-in.
+
+### Reliability
+
+Requests to TimeTree have timeouts and are retried automatically with exponential backoff on rate limiting (HTTP 429, honouring `Retry-After`) and server errors. Failures are reported as a short message rather than a traceback; run with `-v` for details.
+
+Exit codes: `0` success, `1` export or network failure, `2` authentication failure, `3` invalid input, `130` interrupted.
+
+### Docker
+
+```bash
+docker build -t timetree-exporter .
+docker run --rm -it \
+  -e TIMETREE_EMAIL=email@example.com -e TIMETREE_PASSWORD=password \
+  -v "$PWD/export:/export" \
+  timetree-exporter -c calendar_code -o /export/timetree.ics --sync-state /export/sync.json
+```
+
+### Scheduled exports
+
+[`examples/scheduled-export.yml`](examples/scheduled-export.yml) is a GitHub Actions workflow that exports a calendar every night, keeps the sync state in the Actions cache so only changes are fetched, and uploads the `.ics` as an artifact. Copy it into `.github/workflows/` of your own repository and add the credentials as repository secrets.
+
+## Privacy and security notes
+
+- Your credentials are sent only to `timetreeapp.com` over HTTPS and are never written to disk. With `--session-id` the tool never handles your password at all.
+- TimeTree does not expose a sign-out API that this tool can call, so a web session created by signing in stays valid on TimeTree's side until it expires. Sign out in the TimeTree app or web if you want to invalidate it sooner.
+- `--developer-mode` writes raw API responses, i.e. the full calendar content, to `raw-timetree/`. It is off by default.
+- Exports of shared calendars contain data written by other members. Treat the resulting files accordingly.
 
 ## Limitations
 

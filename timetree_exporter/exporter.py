@@ -5,14 +5,16 @@ import logging
 import re
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
-from importlib.metadata import version
+from datetime import date, datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path, PurePosixPath
 from zoneinfo import ZoneInfo
 
 from icalendar import Calendar as ICalendar
 
 from timetree_exporter import ICalEventFormatter, TimeTreeEvent, TimeTreePublicEvent
+from timetree_exporter.filters import filter_events_by_date
+from timetree_exporter.sync_state import SyncState
 from timetree_exporter.utils import add_bounded_timezones_before_events, escape_image_part
 
 logger = logging.getLogger(__name__)
@@ -29,22 +31,56 @@ class Exporter:
         include_comments=False,
         num_workers=10,
         include_images=False,
+        include_attendees=False,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        sync_state: SyncState | None = None,
     ):
         self.calendar = calendar
         self.output = output
         self.split_by_label = split_by_label
         self.include_comments = include_comments
         self.include_images = include_images
+        self.include_attendees = include_attendees
         self.num_workers = num_workers
+        self.date_from = date_from
+        self.date_to = date_to
+        self.sync_state = sync_state
+
+    def _fetch_events(self):
+        """Fetch events, going through the sync state when incremental sync is enabled."""
+        fetch_kwargs = {
+            "include_comments": self.include_comments,
+            "include_images": self.include_images,
+            "num_workers": self.num_workers,
+        }
+        if self.sync_state is None:
+            return self.calendar.get_events(**fetch_kwargs)
+
+        if not self.calendar.supports_incremental_sync:
+            logger.warning(
+                "Incremental sync is not available for calendar '%s'; doing a full export",
+                self.calendar.name,
+            )
+            return self.calendar.get_events(**fetch_kwargs)
+
+        since = self.sync_state.since(self.calendar.id)
+        if since is None:
+            logger.info(
+                "No sync cursor for calendar '%s' yet, fetching everything", self.calendar.name
+            )
+        else:
+            logger.info("Fetching changes for calendar '%s' since %s", self.calendar.name, since)
+        page = self.calendar.get_events_since(since, **fetch_kwargs)
+        events = self.sync_state.apply(self.calendar.id, page, full=since is None)
+        self.sync_state.save()
+        return events
 
     def export(self):
         """Fetch labels and events, then write the configured iCalendar output."""
-        events = self.calendar.get_events(
-            include_comments=self.include_comments,
-            include_images=self.include_images,
-            num_workers=self.num_workers,
-        )
+        events = self._fetch_events()
         logger.info("Found %d events", len(events))
+        events = filter_events_by_date(events, self.date_from, self.date_to)
 
         if self.include_images and not self.calendar.is_public:
             download_event_images(self.calendar, events, self.output, self.num_workers)
@@ -55,13 +91,16 @@ class Exporter:
         logger.info("Found %d labels", len(labels))
 
         event_cls = TimeTreePublicEvent if self.calendar.is_public else TimeTreeEvent
+        user_names = self.calendar.user_names() if self.include_attendees else None
 
         if self.split_by_label:
-            grouped_events = group_events_by_label(events, labels, event_cls=event_cls)
+            grouped_events = group_events_by_label(
+                events, labels, event_cls=event_cls, user_names=user_names
+            )
             write_split_calendars(grouped_events, labels, self.output, len(events))
             return
 
-        cal = build_single_calendar(events, labels, event_cls=event_cls)
+        cal = build_single_calendar(events, labels, event_cls=event_cls, user_names=user_names)
         logger.info(
             "A total of %d/%d events are added to the calendar",
             len(cal.subcomponents),
@@ -70,10 +109,17 @@ class Exporter:
         write_calendar(cal, self.output)
 
 
+def _package_version():
+    try:
+        return version("timetree_exporter")
+    except PackageNotFoundError:  # pragma: no cover - only when run from an unbuilt checkout
+        return "unknown"
+
+
 def create_calendar():
     """Create a new iCalendar object with standard properties."""
     cal = ICalendar()
-    cal.add("prodid", f"-//TimeTree Exporter {version('timetree_exporter')}//EN")
+    cal.add("prodid", f"-//TimeTree Exporter {_package_version()}//EN")
     cal.add("version", "2.0")
     return cal
 
@@ -196,7 +242,32 @@ def public_labels_from_events(events):
     return labels
 
 
-def build_single_calendar(events, labels, event_cls=TimeTreeEvent):
+def resolve_attendees(time_tree_event, user_names):
+    """Return attendee dicts with ids and display names for the formatter.
+
+    ``user_names=None`` disables attendee export entirely.
+    """
+    if user_names is None:
+        return None
+    return [
+        {"id": user_id, "name": user_names.get(user_id)}
+        for user_id in getattr(time_tree_event, "attendees", None) or []
+    ]
+
+
+def format_event(time_tree_event, label_name, color, user_names=None):
+    """Convert one TimeTree event into an iCalendar VEVENT (or None when skipped)."""
+    formatter = ICalEventFormatter(
+        time_tree_event,
+        label_name=label_name,
+        color=color,
+        category_names=getattr(time_tree_event, "category_names", None),
+        attendees=resolve_attendees(time_tree_event, user_names),
+    )
+    return formatter.to_ical()
+
+
+def build_single_calendar(events, labels, event_cls=TimeTreeEvent, user_names=None):
     """Build single output calendar from events."""
     cal = create_calendar()
     label_lookup = {lid: info["name"] for lid, info in labels.items()} if labels else {}
@@ -210,20 +281,14 @@ def build_single_calendar(events, labels, event_cls=TimeTreeEvent):
         color = color_lookup.get(time_tree_event.label_id) or getattr(
             time_tree_event, "label_color", None
         )
-        formatter = ICalEventFormatter(
-            time_tree_event,
-            label_name=label_name,
-            color=color,
-            category_names=getattr(time_tree_event, "category_names", None),
-        )
-        ical_event = formatter.to_ical()
+        ical_event = format_event(time_tree_event, label_name, color, user_names)
         if ical_event is not None:
             cal.add_component(ical_event)
 
     return cal
 
 
-def group_events_by_label(events, labels, event_cls=TimeTreeEvent):
+def group_events_by_label(events, labels, event_cls=TimeTreeEvent, user_names=None):
     """Group converted iCal events by label id (or None for unlabeled)."""
     grouped = defaultdict(list)
 
@@ -236,13 +301,7 @@ def group_events_by_label(events, labels, event_cls=TimeTreeEvent):
         else:
             label_name = getattr(time_tree_event, "label_name", None)
             color = getattr(time_tree_event, "label_color", None)
-        formatter = ICalEventFormatter(
-            time_tree_event,
-            label_name=label_name,
-            color=color,
-            category_names=getattr(time_tree_event, "category_names", None),
-        )
-        ical_event = formatter.to_ical()
+        ical_event = format_event(time_tree_event, label_name, color, user_names)
 
         if ical_event is None:
             continue

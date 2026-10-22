@@ -32,7 +32,7 @@ def escape_image_part(part):
     return escaped
 
 
-def get_events_from_file(file_path) -> list:
+def get_events_from_file(file_path) -> list | None:
     """Fetch events from Timetree response file"""
     try:
         with Path(file_path).open(encoding="UTF-8") as response_file:
@@ -78,7 +78,7 @@ def convert_timestamp_to_datetime(timestamp, tzinfo=None):
 
 def get_timezone_date_ranges(cal):
     """Return the exported event date range for each referenced TZID."""
-    ranges = {}
+    ranges: dict[str, tuple[date, date]] = {}
 
     for component in cal.subcomponents:
         if component.name != "VEVENT":
@@ -146,7 +146,7 @@ def safe_getpass(prompt="Password: ", echo_char=None):
     sig = inspect.signature(getpass.getpass)
     if "echo_char" in sig.parameters:
         # Python 3.14+ supports echo_char
-        return getpass.getpass(  # pylint: disable=E1123
+        return getpass.getpass(  # type: ignore[call-arg]  # pylint: disable=E1123
             prompt=prompt, echo_char=echo_char
         )
     if echo_char is not None:

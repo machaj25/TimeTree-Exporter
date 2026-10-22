@@ -213,7 +213,7 @@ def test_exporter_fetches_labels_and_writes_single_calendar(tmp_path, normal_eve
     assert api.fetched_calendar_users == [{"user_id": 10, "name": "Alice"}]
     assert api.include_comments is False
     assert api.fetched_labels_for == "calendar-id"
-    assert "SUMMARY:測試一般活動" in serialized
+    assert "SUMMARY:Test normal event (café)" in serialized
 
 
 def test_exporter_can_include_comments(tmp_path, normal_event_data):
@@ -242,7 +242,7 @@ def test_exporter_writes_event_images_and_manifest(tmp_path, normal_event_data):
     assert api.include_images is True
     assert api.downloaded_images == [("calendar/18d9/photo.jpg", image_path)]
     assert (tmp_path / "timetree_images.json").read_text(encoding="utf-8") == (
-        '[\n  {\n    "event_uuid": "test-uuid-normal",\n    "title": "測試一般活動",\n'
+        '[\n  {\n    "event_uuid": "test-uuid-normal",\n    "title": "Test normal event (café)",\n'
         '    "start_date": "2024-04-15",\n    "image_path": '
         '"timetree_images/test-uuid-normal/calendar/18d9/photo.jpg",\n'
         '    "object_key": "calendar/18d9/photo.jpg"\n  }\n]\n'
@@ -302,7 +302,7 @@ def test_exporter_writes_split_calendars_by_label(tmp_path, labeled_event_data):
     split_path = tmp_path / "calendar_Work___Home.ics"
     serialized = split_path.read_text(encoding="utf-8")
     assert not output_path.exists()
-    assert "SUMMARY:測試有標籤活動" in serialized
+    assert "SUMMARY:Test labeled event" in serialized
 
 
 def test_public_calendar_fetches_public_events_and_skips_labels(tmp_path, normal_event_data):
@@ -334,7 +334,7 @@ def test_public_calendar_fetches_public_events_and_skips_labels(tmp_path, normal
     assert api.fetched_events_for == ("public-calendar-id", "Public Calendar")
     assert api.fetched_labels_for is None
     assert api.fetched_public_labels_for == "public-calendar-id"
-    assert "SUMMARY:測試一般活動" in serialized
+    assert "SUMMARY:Test normal event (café)" in serialized
     assert "UID:public-event-id" in serialized
     assert "CATEGORIES:Public Campaign,Shopping" in serialized
     assert "COLOR:#948078" in serialized

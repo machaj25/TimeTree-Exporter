@@ -2,11 +2,15 @@
 Timetree calendar API
 """
 
+import contextlib
 import json
 import logging
 import re
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import requests
 from requests.exceptions import HTTPError, Timeout
@@ -16,12 +20,43 @@ from timetree_exporter.api.const import (
     API_USER_AGENT,
     API_V2_BASEURI,
     ATTACHMENT_TIMEOUT,
+    ATTACHMENTS_BASEURI,
+    REQUEST_TIMEOUT,
 )
+from timetree_exporter.api.session import build_session
 from timetree_exporter.config import get_raw_output_dir
 
 logger = logging.getLogger(__name__)
 
 PUBLIC_EVENTS_FROM = 0
+
+JSON_HEADERS = {
+    "Content-Type": "application/json",
+    "X-Timetreea": API_USER_AGENT,
+}
+
+
+@dataclass
+class EventPage:
+    """Result of one (possibly multi-chunk) fetch of the events sync endpoint."""
+
+    events: list[dict[str, Any]] = field(default_factory=list)
+    deleted_uuids: list[str] = field(default_factory=list)
+    since: int | None = None
+
+
+def split_deactivated_events(events: Iterable[dict[str, Any]]) -> tuple[list[dict], list[str]]:
+    """Split events into active events and the UUIDs of deactivated (deleted) ones."""
+    active: list[dict[str, Any]] = []
+    deleted: list[str] = []
+    for event in events:
+        if event.get("deactivated_at"):
+            uuid = event.get("uuid")
+            if uuid:
+                deleted.append(uuid)
+            continue
+        active.append(event)
+    return active, deleted
 
 
 class TimeTreeCalendar:
@@ -29,15 +64,36 @@ class TimeTreeCalendar:
     Timetree calendar API
     """
 
-    def __init__(self, session_id: str, capture_raw_responses: bool | None = None):
-        self.session = requests.Session()
-        self.session.cookies.set("_session_id", session_id)
+    def __init__(self, session_id: str | None, capture_raw_responses: bool | None = None):
+        self.session = build_session(session_id)
         self.capture_raw_responses = (
             get_raw_output_dir() is not None
             if capture_raw_responses is None
             else capture_raw_responses
         )
-        self.raw_responses = []
+        self.raw_responses: list[tuple[str, Any]] = []
+
+    def close(self) -> None:
+        """Drop the session cookie and close pooled connections."""
+        with contextlib.suppress(Exception):  # fake sessions in tests have no cookie jar
+            self.session.cookies.clear()
+        close = getattr(self.session, "close", None)
+        if callable(close):
+            close()
+
+    def __enter__(self) -> "TimeTreeCalendar":
+        return self
+
+    def __exit__(self, *_exc_info: object) -> None:
+        self.close()
+
+    def _get(self, url: str, params: dict[str, Any] | None = None, **kwargs: Any):
+        """Perform a GET request with the standard headers and timeout."""
+        kwargs.setdefault("headers", JSON_HEADERS)
+        kwargs.setdefault("timeout", REQUEST_TIMEOUT)
+        if params is not None:
+            kwargs["params"] = params
+        return self.session.get(url, **kwargs)
 
     def _record_raw_response(self, name, payload):
         """Keep raw API payloads available for debug output."""
@@ -73,15 +129,10 @@ class TimeTreeCalendar:
         Get calendar metadata.
         """
         url = f"{API_BASEURI}/calendars?since=0"
-        response = self.session.get(
-            url,
-            headers={
-                "Content-Type": "application/json",
-                "X-Timetreea": API_USER_AGENT,
-            },
-        )
+        response = self._get(url)
         if response.status_code != 200:
-            logger.error(response.text)
+            logger.error("Failed to get calendar metadata (HTTP %s)", response.status_code)
+            logger.debug(response.text)
             raise HTTPError("Failed to get calendar metadata")
         r_json = response.json()
         self._record_raw_response("calendars", r_json)
@@ -91,14 +142,9 @@ class TimeTreeCalendar:
         """
         Get labels for a calendar.
         """
-        headers = {
-            "Content-Type": "application/json",
-            "X-Timetreea": API_USER_AGENT,
-        }
-
         # Call dedicated labels endpoint (internal API pattern)
         url = f"{API_BASEURI}/calendar/{calendar_id}/labels"
-        response = self.session.get(url, headers=headers)
+        response = self._get(url)
         logger.debug(
             "GET %s -> %d\n%s",
             url,
@@ -114,6 +160,12 @@ class TimeTreeCalendar:
             r_json = response.json()
             self._record_raw_response(f"calendar_{calendar_id}/labels", r_json)
             labels = self._parse_labels(r_json)
+        else:
+            logger.warning(
+                "Failed to get labels for calendar %s (HTTP %s); exporting without labels",
+                calendar_id,
+                response.status_code,
+            )
 
         logger.debug("Parsed %d labels: %s", len(labels), labels)
         return labels
@@ -123,12 +175,10 @@ class TimeTreeCalendar:
         Get labels for a public calendar.
         """
         url = f"{API_V2_BASEURI}/public_calendars/{calendar_id}"
-        response = self.session.get(
-            url,
-            headers={"Content-Type": "application/json", "X-Timetreea": API_USER_AGENT},
-        )
+        response = self._get(url)
         if response.status_code != 200:
-            logger.error(response.text)
+            logger.error("Failed to get public calendar labels (HTTP %s)", response.status_code)
+            logger.debug(response.text)
             raise HTTPError("Failed to get public calendar labels")
 
         r_json = response.json()
@@ -174,27 +224,51 @@ class TimeTreeCalendar:
 
         return labels
 
-    def get_events_recur(self, calendar_id: int, since: int):
-        """
-        Get events from the calendar.(Recursively)
-        """
-        url = f"{API_BASEURI}/calendar/{calendar_id}/events/sync?since={since}"
-        response = self.session.get(
-            url,
-            headers={
-                "Content-Type": "application/json",
-                "X-Timetreea": API_USER_AGENT,
-            },
-        )
+    def _fetch_event_pages(
+        self, calendar_id: int, since: int | None = None, calendar_name: str | None = None
+    ) -> EventPage:
+        """Fetch every chunk of the events sync endpoint starting at ``since``.
 
-        r_json = response.json()
-        self._record_raw_response(f"calendar_{calendar_id}/events_sync_since_{since}", r_json)
+        The endpoint answers with ``chunk: true`` and a new ``since`` cursor while
+        more data is pending. Pages are followed iteratively so that very large
+        calendars do not grow the call stack.
+        """
+        page = EventPage()
+        cursor = since
+        while True:
+            url = f"{API_BASEURI}/calendar/{calendar_id}/events/sync"
+            name = f"calendar_{calendar_id}/events_sync"
+            if cursor is not None:
+                url = f"{url}?since={cursor}"
+                name = f"{name}_since_{cursor}"
 
-        events = r_json["events"]
-        logger.info("Fetched %d events", len(events))
-        if r_json["chunk"] is True:
-            events.extend(self.get_events_recur(calendar_id, r_json["since"]))
-        return events
+            response = self._get(url)
+            if response.status_code != 200:
+                label = f" '{calendar_name}'" if calendar_name else ""
+                logger.error(
+                    "Failed to get events of the calendar%s (HTTP %s)", label, response.status_code
+                )
+                logger.debug(response.text)
+                raise HTTPError(f"Failed to get events of the calendar{label}")
+
+            r_json = response.json()
+            self._record_raw_response(name, r_json)
+
+            events = r_json.get("events") or []
+            active, deleted = split_deactivated_events(events)
+            page.events.extend(active)
+            page.deleted_uuids.extend(deleted)
+            logger.info("Fetched %d events", len(events))
+            if deleted:
+                logger.debug("Skipped %d deactivated events", len(deleted))
+
+            next_since = r_json.get("since")
+            if next_since is not None:
+                page.since = next_since
+            if r_json.get("chunk") is True and next_since is not None:
+                cursor = next_since
+                continue
+            return page
 
     @staticmethod
     def _extract_activity_comment(activity):
@@ -266,29 +340,31 @@ class TimeTreeCalendar:
 
     def _fetch_event_activities(self, calendar_id, event_uuid, since=0):
         """Fetch raw activities, including all pages, for one event."""
-        url = f"{API_BASEURI}/calendar/{calendar_id}/event/{event_uuid}/activities?since={since}"
-        response = self.session.get(
-            url,
-            headers={
-                "Content-Type": "application/json",
-                "X-Timetreea": API_USER_AGENT,
-            },
-        )
-        if response.status_code != 200:
-            logger.warning("Failed to get activities for event %s", event_uuid)
-            logger.debug(response.text)
-            return []
-
-        r_json = response.json()
-        self._record_raw_response(
-            f"calendar_{calendar_id}/event_{event_uuid}/activities_since_{since}", r_json
-        )
-        activities = r_json.get("activities") or r_json.get("event_activities", [])
-        if r_json.get("chunk") is True:
-            activities.extend(
-                self._fetch_event_activities(calendar_id, event_uuid, r_json["since"])
+        activities: list[dict[str, Any]] = []
+        cursor = since
+        while True:
+            url = (
+                f"{API_BASEURI}/calendar/{calendar_id}/event/{event_uuid}/activities?since={cursor}"
             )
-        return activities
+            response = self._get(url)
+            if response.status_code != 200:
+                logger.warning(
+                    "Failed to get activities for event %s (HTTP %s)",
+                    event_uuid,
+                    response.status_code,
+                )
+                logger.debug(response.text)
+                return activities
+
+            r_json = response.json()
+            self._record_raw_response(
+                f"calendar_{calendar_id}/event_{event_uuid}/activities_since_{cursor}", r_json
+            )
+            activities.extend(r_json.get("activities") or r_json.get("event_activities", []))
+            if r_json.get("chunk") is True and r_json.get("since") is not None:
+                cursor = r_json["since"]
+                continue
+            return activities
 
     def add_event_activities(
         self,
@@ -358,45 +434,54 @@ class TimeTreeCalendar:
     def get_events(
         self,
         calendar_id: int,
-        calendar_name: str = None,
+        calendar_name: str | None = None,
         calendar_users=None,
         include_comments: bool = False,
         num_workers: int = 10,
         include_images: bool = False,
     ):
         """
-        Get events from the calendar.
+        Get all active events from the calendar.
         """
-        url = f"{API_BASEURI}/calendar/{calendar_id}/events/sync"
-        response = self.session.get(
-            url,
-            headers={"Content-Type": "application/json", "X-Timetreea": API_USER_AGENT},
-        )
-        if response.status_code != 200:
-            if calendar_name is not None:
-                logger.error("Failed to get events of the calendar '%s'", calendar_name)
-            else:
-                logger.error("Failed to get events of the calendar")
-            logger.error(response.text)
+        return self.get_events_since(
+            calendar_id,
+            None,
+            calendar_name=calendar_name,
+            calendar_users=calendar_users,
+            include_comments=include_comments,
+            num_workers=num_workers,
+            include_images=include_images,
+        ).events
 
-        r_json = response.json()
-        self._record_raw_response(f"calendar_{calendar_id}/events_sync", r_json)
-        events = r_json["events"]
-        logger.info("Fetched %d events", len(events))
-        if r_json["chunk"] is True:
-            events.extend(self.get_events_recur(calendar_id, r_json["since"]))
+    def get_events_since(
+        self,
+        calendar_id: int,
+        since: int | None,
+        calendar_name: str | None = None,
+        calendar_users=None,
+        include_comments: bool = False,
+        num_workers: int = 10,
+        include_images: bool = False,
+    ) -> EventPage:
+        """
+        Get events changed since a sync cursor, with deleted event UUIDs and the next cursor.
+
+        ``since=None`` performs a full fetch.
+        """
+        page = self._fetch_event_pages(calendar_id, since, calendar_name)
+        events = page.events
 
         logger.debug(
             "Top 5 fetched events: \n %s",
             json.dumps(events[:5], indent=2, ensure_ascii=False),
         )
 
-        if include_comments or include_images:
+        if events and (include_comments or include_images):
             logger.warning(
                 "Exporting comments or images requires extra TimeTree requests per event and may "
                 "take much longer or trigger rate limits."
             )
-            return self.add_event_activities(
+            page.events = self.add_event_activities(
                 calendar_id,
                 events,
                 calendar_users,
@@ -404,11 +489,11 @@ class TimeTreeCalendar:
                 include_images=include_images,
                 num_workers=num_workers,
             )
-        return events
+        return page
 
     def download_image(self, object_key, output_path):
         """Download one TimeTree attachment image to the requested path."""
-        url = f"https://attachments.timetreeapp.com/{object_key}"
+        url = f"{ATTACHMENTS_BASEURI}/{object_key}"
         try:
             response = self.session.get(url, stream=True, timeout=ATTACHMENT_TIMEOUT)
         except Timeout:
@@ -429,28 +514,26 @@ class TimeTreeCalendar:
             output_path.unlink(missing_ok=True)
             raise
 
-    def get_public_events(self, calendar_id: int, calendar_name: str = None):
+    def get_public_events(self, calendar_id: int, calendar_name: str | None = None):
         """
         Get events from a public calendar.
         """
         url = f"{API_V2_BASEURI}/public_calendars/{calendar_id}/public_events"
-        events = []
+        events: list[dict[str, Any]] = []
         cursor = None
         while True:
-            params = {"from": PUBLIC_EVENTS_FROM}
+            params: dict[str, Any] = {"from": PUBLIC_EVENTS_FROM}
             if cursor:
                 params["cursor"] = cursor
-            response = self.session.get(
-                url,
-                headers={"Content-Type": "application/json", "X-Timetreea": API_USER_AGENT},
-                params=params,
-            )
+            response = self._get(url, params=params)
             if response.status_code != 200:
-                if calendar_name is not None:
-                    logger.error("Failed to get events of the public calendar '%s'", calendar_name)
-                else:
-                    logger.error("Failed to get events of the public calendar")
-                logger.error(response.text)
+                label = f" '{calendar_name}'" if calendar_name else ""
+                logger.error(
+                    "Failed to get events of the public calendar%s (HTTP %s)",
+                    label,
+                    response.status_code,
+                )
+                logger.debug(response.text)
                 raise HTTPError("Failed to get public calendar events")
 
             r_json = response.json()
@@ -474,3 +557,6 @@ class TimeTreeCalendar:
         )
 
         return events
+
+
+__all__ = ["EventPage", "TimeTreeCalendar", "requests", "split_deactivated_events"]

@@ -1,6 +1,22 @@
 """This module provides the TimeTreeEvent class for representing TimeTree events."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import IntEnum
+from typing import Any
+
+
+class TimeTreeEventType(IntEnum):
+    """TimeTree event type enumeration"""
+
+    NORMAL = 0
+    BIRTHDAY = 1
+
+
+class TimeTreeEventCategory(IntEnum):
+    """TimeTree event category enumeration"""
+
+    NORMAL = 1
+    MEMO = 2
 
 
 @dataclass
@@ -9,28 +25,30 @@ class TimeTreeEvent:
 
     # pylint: disable=too-many-instance-attributes
 
-    uuid: str
-    title: str
-    created_at: int
-    updated_at: int
-    recurrences: list
-    alerts: list
-    url: str
-    note: str
-    start_at: int
-    end_at: int
-    all_day: bool
-    start_timezone: str
-    end_timezone: str
-    location_lat: str
-    location_lon: str
-    location: str
-    parent_id: str
-    recurring_uuid: str
-    event_type: int
-    category: int
-    label_id: int = None
-    comments: list = None
+    uuid: str | None
+    title: str | None
+    created_at: int | None
+    updated_at: int | None
+    recurrences: list | None
+    alerts: list | None
+    url: str | None
+    note: str | None
+    start_at: int | None
+    end_at: int | None
+    all_day: bool | None
+    start_timezone: str | None
+    end_timezone: str | None
+    location_lat: str | None
+    location_lon: str | None
+    location: str | None
+    parent_id: str | None
+    recurring_uuid: str | None
+    event_type: int | None
+    category: int | None
+    label_id: int | None = None
+    comments: list | None = None
+    attendees: list = field(default_factory=list)
+    deactivated_at: int | None = None
 
     @staticmethod
     def _extract_label_id(event_data: dict):
@@ -51,6 +69,26 @@ class TimeTreeEvent:
             pass
 
         return None
+
+    @staticmethod
+    def _extract_attendees(event_data: dict) -> list[Any]:
+        """Return attendee user ids from the event payload.
+
+        TimeTree stores attendees as a list of user ids, but a list of user
+        objects is tolerated as well. Unknown shapes are ignored.
+        """
+        raw = event_data.get("attendees")
+        if not isinstance(raw, list):
+            return []
+        attendees: list[Any] = []
+        for item in raw:
+            if isinstance(item, dict):
+                user_id = item.get("user_id") or item.get("id")
+                if user_id is not None:
+                    attendees.append(user_id)
+            elif item is not None:
+                attendees.append(item)
+        return attendees
 
     @classmethod
     def from_dict(cls, event_data: dict):
@@ -78,6 +116,8 @@ class TimeTreeEvent:
             category=event_data.get("category"),
             label_id=cls._extract_label_id(event_data),
             comments=event_data.get("comments"),
+            attendees=cls._extract_attendees(event_data),
+            deactivated_at=event_data.get("deactivated_at"),
         )
 
     def __str__(self):
@@ -88,20 +128,20 @@ class TimeTreeEvent:
 class TimeTreePublicEvent(TimeTreeEvent):
     """TimeTree public calendar event from the API v2 public_events response."""
 
-    headline: str = None
-    overview: str = None
-    link_url: str = None
-    location_address: str = None
-    location_url: str = None
-    location_note: str = None
-    label_name: str = None
-    label_color: str = None
-    category_names: list = None
-    image_urls: list = None
-    thumbnail_image_urls: list = None
-    video_urls: list = None
-    until_at: int = None
-    source_url: str = None
+    headline: str | None = None
+    overview: str | None = None
+    link_url: str | None = None
+    location_address: str | None = None
+    location_url: str | None = None
+    location_note: str | None = None
+    label_name: str | None = None
+    label_color: str | None = None
+    category_names: list | None = None
+    image_urls: list | None = None
+    thumbnail_image_urls: list | None = None
+    video_urls: list | None = None
+    until_at: int | None = None
+    source_url: str | None = None
 
     @staticmethod
     def _extract_cover_image_urls(event_data):
@@ -221,19 +261,3 @@ class TimeTreePublicEvent(TimeTreeEvent):
         if isinstance(color, int):
             return f"#{color:06x}"
         return color
-
-
-@dataclass
-class TimeTreeEventType(enumerate):
-    """TimeTree event type enumeration"""
-
-    NORMAL = 0
-    BIRTHDAY = 1
-
-
-@dataclass
-class TimeTreeEventCategory(enumerate):
-    """TimeTree event category enumeration"""
-
-    NORMAL = 1
-    MEMO = 2

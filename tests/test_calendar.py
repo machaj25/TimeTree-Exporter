@@ -3,9 +3,9 @@
 from pathlib import Path
 
 import pytest
-from requests.exceptions import Timeout
+from requests.exceptions import HTTPError, Timeout
 
-from timetree_exporter.api.calendar import TimeTreeCalendar
+from timetree_exporter.api.calendar import TimeTreeCalendar, split_deactivated_events
 from timetree_exporter.config import configure_developer_mode
 
 
@@ -359,3 +359,107 @@ def test_raw_public_event_response_filename_includes_calendar_id(tmp_path):
         configure_developer_mode()
 
     assert (tmp_path / "public_calendar_public-calendar-id/01_public_events.json").exists()
+
+
+class _StatusSession:
+    """Session returning payloads by URL with a configurable status code."""
+
+    def __init__(self, payloads, status_code=200):
+        self._payloads = payloads
+        self.status_code = status_code
+        self.requested = []
+
+    def get(self, url, **kwargs):
+        self.requested.append((url, kwargs))
+        response = _FakeResponse(self._payloads.get(url, {}))
+        response.status_code = self.status_code
+        return response
+
+
+def test_requests_carry_a_timeout():
+    """Every JSON API call must pass a timeout so a hung server cannot block forever."""
+    calendar = TimeTreeCalendar("sid", capture_raw_responses=False)
+    session = _StatusSession(
+        {"https://timetreeapp.com/api/v1/calendars?since=0": {"calendars": []}}
+    )
+    calendar.session = session
+
+    calendar.get_metadata()
+
+    _url, kwargs = session.requested[0]
+    assert kwargs["timeout"] == (10, 30)
+    assert kwargs["headers"]["X-Timetreea"]
+
+
+def test_get_events_raises_on_http_error():
+    """A failed events request must raise instead of crashing on a missing key."""
+    calendar = TimeTreeCalendar("sid", capture_raw_responses=False)
+    calendar.session = _StatusSession({}, status_code=500)
+
+    with pytest.raises(HTTPError, match="Failed to get events"):
+        calendar.get_events(1, "Family")
+
+
+def test_get_events_follows_chunks_iteratively_and_skips_deactivated():
+    """Chunked sync responses are followed with the returned cursor; tombstones are dropped."""
+    calendar = TimeTreeCalendar("sid", capture_raw_responses=False)
+    base = "https://timetreeapp.com/api/v1/calendar/1/events/sync"
+    calendar.session = _UrlPayloadSession(
+        {
+            base: {
+                "events": [{"uuid": "a"}, {"uuid": "gone", "deactivated_at": 5}],
+                "chunk": True,
+                "since": 100,
+            },
+            f"{base}?since=100": {"events": [{"uuid": "b"}], "chunk": True, "since": 200},
+            f"{base}?since=200": {"events": [{"uuid": "c"}], "chunk": False, "since": 300},
+        }
+    )
+
+    page = calendar.get_events_since(1, None)
+
+    assert [e["uuid"] for e in page.events] == ["a", "b", "c"]
+    assert page.deleted_uuids == ["gone"]
+    assert page.since == 300
+    assert calendar.session.requested_urls == [base, f"{base}?since=100", f"{base}?since=200"]
+    assert calendar.get_events(1) == [{"uuid": "a"}, {"uuid": "b"}, {"uuid": "c"}]
+
+
+def test_get_events_since_starts_from_cursor():
+    calendar = TimeTreeCalendar("sid", capture_raw_responses=False)
+    base = "https://timetreeapp.com/api/v1/calendar/1/events/sync"
+    calendar.session = _UrlPayloadSession(
+        {f"{base}?since=42": {"events": [], "chunk": False, "since": 43}}
+    )
+
+    page = calendar.get_events_since(1, 42)
+
+    assert page.events == []
+    assert page.since == 43
+
+
+def test_split_deactivated_events():
+    active, deleted = split_deactivated_events(
+        [{"uuid": "a"}, {"uuid": "b", "deactivated_at": 1}, {"deactivated_at": 2}]
+    )
+
+    assert active == [{"uuid": "a"}]
+    assert deleted == ["b"]
+
+
+def test_close_clears_cookie_and_closes_session():
+    calendar = TimeTreeCalendar("sid", capture_raw_responses=False)
+    assert calendar.session.cookies.get("_session_id") == "sid"
+
+    with calendar:
+        pass
+
+    assert calendar.session.cookies.get("_session_id") is None
+
+
+def test_get_labels_warns_instead_of_failing_on_http_error(caplog):
+    calendar = TimeTreeCalendar("sid", capture_raw_responses=False)
+    calendar.session = _StatusSession({}, status_code=403)
+
+    assert calendar.get_labels(1) == {}
+    assert "exporting without labels" in caplog.text

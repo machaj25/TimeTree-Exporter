@@ -7,7 +7,7 @@ import logging
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
-from icalendar import Alarm, Event, vDate, vDatetime, vGeo, vRecur
+from icalendar import Alarm, Event, vCalAddress, vDate, vDatetime, vGeo, vRecur
 from icalendar.parser import Contentline
 from icalendar.prop import vDDDLists
 
@@ -29,14 +29,16 @@ class ICalEventFormatter:
     def __init__(
         self,
         time_tree_event: TimeTreeEvent,
-        label_name: str = None,
-        color: str = None,
-        category_names: list = None,
+        label_name: str | None = None,
+        color: str | None = None,
+        category_names: list | None = None,
+        attendees: list[dict] | None = None,
     ):
         self.time_tree_event = time_tree_event
         self.label_name = label_name
         self._color = color
         self.category_names = category_names or []
+        self._attendees = attendees or []
 
     @property
     def color(self):
@@ -82,19 +84,32 @@ class ICalEventFormatter:
         """Return the title of the event."""
         return self.time_tree_event.title
 
+    @staticmethod
+    def _utc_stamp(timestamp_ms: int | None):
+        """Convert a millisecond timestamp to a UTC vDatetime, or None when missing."""
+        if timestamp_ms is None:
+            return None
+        return vDatetime(convert_timestamp_to_datetime(timestamp_ms / 1000, ZoneInfo("UTC")))
+
     @property
     def created(self):
         """Return the creation time of the event."""
-        return vDatetime(
-            convert_timestamp_to_datetime(self.time_tree_event.created_at / 1000, ZoneInfo("UTC"))
-        )
+        return self._utc_stamp(self.time_tree_event.created_at)
 
     @property
     def last_modified(self):
         """Return the last modification time of the event."""
-        return vDatetime(
-            convert_timestamp_to_datetime(self.time_tree_event.updated_at / 1000, ZoneInfo("UTC"))
-        )
+        return self._utc_stamp(self.time_tree_event.updated_at)
+
+    @property
+    def start_timezone(self) -> str:
+        """Return the start timezone name, defaulting to UTC."""
+        return self.time_tree_event.start_timezone or "UTC"
+
+    @property
+    def end_timezone(self) -> str:
+        """Return the end timezone name, defaulting to the start timezone."""
+        return self.time_tree_event.end_timezone or self.start_timezone
 
     @property
     def description(self):
@@ -144,6 +159,28 @@ class ICalEventFormatter:
         return getattr(self.time_tree_event, "thumbnail_image_urls", None) or []
 
     @property
+    def attendees(self):
+        """Return ATTENDEE values for resolved event attendees.
+
+        TimeTree exposes attendees only as internal user ids, so the calendar
+        address is a ``urn:x-timetree:user:<id>`` URI with the display name in
+        ``CN``. Entries without an id are skipped.
+        """
+        values = []
+        for attendee in self._attendees:
+            user_id = attendee.get("id")
+            if user_id is None:
+                continue
+            address = vCalAddress(f"urn:x-timetree:user:{user_id}")
+            name = attendee.get("name")
+            if name:
+                address.params["CN"] = str(name)
+            address.params["CUTYPE"] = "INDIVIDUAL"
+            address.params["ROLE"] = "REQ-PARTICIPANT"
+            values.append(address)
+        return values
+
+    @property
     def related_to(self):
         """Return the related event UID."""
         return self.time_tree_event.recurring_uuid or self.time_tree_event.parent_id
@@ -152,10 +189,15 @@ class ICalEventFormatter:
         """Return the start or end time of the event."""
         if is_start_time:
             time = self.time_tree_event.start_at
-            timezone = self.time_tree_event.start_timezone
+            timezone = self.start_timezone
         else:
             time = self.time_tree_event.end_at
-            timezone = self.time_tree_event.end_timezone
+            timezone = self.end_timezone
+
+        if time is None:
+            raise ValueError(
+                f"Event {self.uid!r} has no {'start' if is_start_time else 'end'} time"
+            )
 
         if self.time_tree_event.all_day:
             datetime_value = convert_timestamp_to_datetime(
@@ -220,7 +262,7 @@ class ICalEventFormatter:
                     local_until = datetime.combine(
                         until[0],
                         time(23, 59, 59),
-                        ZoneInfo(self.time_tree_event.start_timezone),
+                        ZoneInfo(self.start_timezone),
                     )
                     recurrence_rule["UNTIL"] = [local_until.astimezone(ZoneInfo("UTC"))]
                 event.add(name, recurrence_rule, parameters)
@@ -230,7 +272,7 @@ class ICalEventFormatter:
                 logger.error("Unknown recurrence type: %s", name)
                 raise ValueError(f"Unknown recurrence type: {name}")
 
-    def to_ical(self) -> Event:
+    def to_ical(self) -> Event | None:
         """Return the iCal event."""
         if (
             self.time_tree_event.event_type == TimeTreeEventType.BIRTHDAY
@@ -264,13 +306,23 @@ class ICalEventFormatter:
 
             return None
 
+        if self.time_tree_event.start_at is None or self.time_tree_event.end_at is None:
+            logger.warning(
+                "Skipping event without start or end time (uid: %s, summary: %r)",
+                self.uid,
+                self.summary,
+            )
+            return None
+
         event = Event()
 
         event.add("uid", self.uid)
         event.add("summary", self.summary)
         event.add("dtstamp", datetime.now(ZoneInfo("UTC")))
-        event.add("created", self.created)
-        event.add("last-modified", self.last_modified)
+        if self.created is not None:
+            event.add("created", self.created)
+        if self.last_modified is not None:
+            event.add("last-modified", self.last_modified)
         event.add("dtstart", self.dtstart)
         event.add("dtend", self.dtend)
 
@@ -291,6 +343,8 @@ class ICalEventFormatter:
             event.add("description", self.description)
         for comment in self.comments:
             event.add("comment", comment)
+        for attendee in self.attendees:
+            event.add("attendee", attendee, encode=False)
         if self.related_to:
             event.add("related-to", self.related_to)
         if self.categories:
