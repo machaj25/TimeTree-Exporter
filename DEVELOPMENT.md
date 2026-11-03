@@ -1,5 +1,13 @@
 # Development
 
+## Documentation map
+
+- `README.md`: user-facing usage, options, privacy notes.
+- `DEVELOPMENT.md` (this file): setup, commands, conventions, field mapping roadmap.
+- `CLAUDE.md`: ground rules and quick reference for AI assistants and new contributors.
+- `docs/ARCHITECTURE.md`: layers, endpoints, data formats, exit codes, testing strategy.
+- `docs/HANDOVER.md`: fork history, decisions and rationale, what was and was not verified, next steps.
+
 ## Setup
 
 Install dependencies with `uv`:
@@ -38,7 +46,20 @@ Run the test suite:
 
 ```bash
 uv run pytest
+uv run pytest --cov=timetree_exporter --cov-report=term-missing
 ```
+
+Conventions:
+
+- Tests never touch the network. Replace `TimeTreeCalendar.session` with a fake that has a
+  `get(url, **kwargs)` method (see `tests/test_calendar.py`), or monkeypatch `requests.put` for
+  login (see `tests/test_auth.py`).
+- The domain layer is exercised through small fake `CalendarApi` implementations
+  (`tests/test_main.py`, `tests/test_entrypoint.py`).
+- End-to-end CLI behaviour is tested by calling `timetree_exporter.__main__.main(argv)` with
+  `authenticate` monkeypatched; add a case there for every new option.
+- Shared payload fixtures live in `tests/conftest.py`. Keep at least one non-ASCII title so
+  UTF-8 output stays covered.
 
 ## Run Locally
 
@@ -118,9 +139,36 @@ When `--include-comments` is used, the exporter fetches event comments from a se
 Run these checks:
 
 ```bash
+uv run ruff check
+uv run ruff format --check
+uv run mypy
 uv run pytest
 uv run pre-commit run --all-files
 ```
+
+CI (`.github/workflows/lint-and-test.yml`) runs the same four checks on Linux and Windows for
+Python 3.10 through 3.14.
+
+## Commit Messages and Releases
+
+Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`,
+`docs:`, `build:`, `chore:`). `release-please` turns them into `CHANGELOG.md` entries and version
+bumps, so never edit `CHANGELOG.md`, `.release-please-manifest.json` or the version in
+`pyproject.toml` by hand. Publishing to PyPI and Homebrew is triggered by the GitHub release;
+see `docs/ARCHITECTURE.md` ("Packaging and release") and `docs/HANDOVER.md` ("CI caveats") for
+what the fork is missing to release on its own.
+
+## Adding Things
+
+- **A CLI option:** declare it in `cli.py`, pass it through `__main__.run()` into `Exporter`,
+  document it in `README.md` and the options table in `docs/ARCHITECTURE.md`, add an end-to-end
+  test in `tests/test_entrypoint.py`.
+- **An API endpoint:** add the URL to `timetree_exporter/api/calendar.py`, call it through
+  `_get()` so it gets headers, timeout and retries, record the payload with
+  `_record_raw_response()` for `--developer-mode`, and list it in the endpoint table in
+  `docs/ARCHITECTURE.md`. Only add endpoints you have seen work; the API is reverse-engineered.
+- **An iCalendar property:** add a property on `ICalEventFormatter`, emit it in `to_ical()`,
+  tick the roadmap below, and cover it in `tests/test_formatter.py`.
 
 ## Roadmap of the properties mapping to iCal
 
