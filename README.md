@@ -179,6 +179,9 @@ docker run --rm -it \
 ## Development
 
 For development setup and contribution details, see [DEVELOPMENT.md](DEVELOPMENT.md).
+How the code is structured is described in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), and
+[docs/HANDOVER.md](docs/HANDOVER.md) records the history of this fork, design decisions and
+open items for whoever picks the project up next.
 
 ## Support
 
