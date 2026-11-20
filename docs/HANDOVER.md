@@ -98,6 +98,7 @@ was byte-identical to the repository. Findings that were acted on:
 
 | Check | Result |
 | --- | --- |
+| Docker image (CI, `docker-publish.yml`) | builds for linux/amd64 and linux/arm64; amd64 smoke test passes |
 | `uv run ruff check`, `uv run ruff format --check` | clean |
 | `uv run mypy` | clean, 16 files |
 | `uv run pytest` | 141 passed; coverage 91 % |
@@ -118,12 +119,11 @@ These are the first things to check with real credentials.
    - that deleted events really arrive with `deactivated_at` on incremental
      fetches;
    - that `attendees` on private events is a list of user ids.
-2. **Docker image build on a local daemon.** No Docker daemon was available
-   in the development environment. The exact `pip wheel` / `pip install`
-   steps from the Dockerfile were replayed in clean virtualenvs and the CLI
-   ran, and `docker-publish.yml` builds and smoke-tests the image in CI on
-   every push and PR. Check that workflow's first run on GitHub; if it is
-   green, the image is verified.
+2. **Running the image against a live account.** The image itself is
+   verified: `docker-publish.yml` built it for amd64 and arm64 and the amd64
+   smoke test (`--version`, `--help`, usage-error exit code 3) passed on PR
+   #4. What has not been exercised is a real export inside the container,
+   i.e. the bind mount on `/export` with credentials in the environment.
 3. **Windows.** CI runs the suite on Windows, but the author did not. The
    sync state uses `Path.replace`, which is fine on Windows; image paths are
    escaped for Windows-reserved names.
