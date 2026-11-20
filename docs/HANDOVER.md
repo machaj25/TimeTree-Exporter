@@ -41,7 +41,8 @@ parts of them. Two policy conflicts will recur on every sync:
 | 2026-10-22 | `728787f` (PR #1) | `uv lock --upgrade`; fixed advisories in urllib3 2.7.0 and certifi 2026.5.20. |
 | 2026-10-22 | `f0e01a2` (PR #2) | Hardening and features, see below. |
 | 2026-10-22 | `a89133f` (PR #2) | English-only repository. |
-| 2026-11-03 | this change | Documentation for handover (`CLAUDE.md`, `docs/`). |
+| 2026-11-03 | `55d8b67` (PR #3) | Documentation for handover (`CLAUDE.md`, `docs/`). |
+| 2026-11-20 | this change | Docker: CI-built multi-arch image on GHCR, `compose.yaml`, `.env.example`. |
 
 ### Security review that started the work
 
@@ -97,6 +98,7 @@ was byte-identical to the repository. Findings that were acted on:
 
 | Check | Result |
 | --- | --- |
+| Docker image (CI, `docker-publish.yml`) | builds for linux/amd64 and linux/arm64; amd64 smoke test passes |
 | `uv run ruff check`, `uv run ruff format --check` | clean |
 | `uv run mypy` | clean, 16 files |
 | `uv run pytest` | 141 passed; coverage 91 % |
@@ -117,17 +119,22 @@ These are the first things to check with real credentials.
    - that deleted events really arrive with `deactivated_at` on incremental
      fetches;
    - that `attendees` on private events is a list of user ids.
-2. **Docker image build.** No Docker daemon was available; the wheel build
-   and install steps that the Dockerfile performs were verified separately.
+2. **Running the image against a live account.** The image itself is
+   verified: `docker-publish.yml` built it for amd64 and arm64 and the amd64
+   smoke test (`--version`, `--help`, usage-error exit code 3) passed on PR
+   #4. What has not been exercised is a real export inside the container,
+   i.e. the bind mount on `/export` with credentials in the environment.
 3. **Windows.** CI runs the suite on Windows, but the author did not. The
    sync state uses `Path.replace`, which is fine on Windows; image paths are
    escaped for Windows-reserved names.
 4. **GitHub Actions in the fork.** `release-please.yml` needs
    `MY_RELEASE_PLEASE_TOKEN` and will fail on every push to `main` in the
    fork; `python-publish.yml` and `bump-homebrew-formula.yml` need the PyPI
-   trusted-publisher setup and `HOMEBREW_FORMULA_TOKEN`. Only
-   `lint-and-test.yml` is expected to be green. Disable the others in the
-   fork's Actions settings or add the secrets if you want releases.
+   trusted-publisher setup and `HOMEBREW_FORMULA_TOKEN`. `lint-and-test.yml`
+   and `docker-publish.yml` are expected to be green (the latter needs only
+   `GITHUB_TOKEN`). Disable the others in the fork's Actions settings or add
+   the secrets if you want releases. The GHCR package is private until made
+   public in the repository's Packages settings.
 
 ## Known limitations and risks
 

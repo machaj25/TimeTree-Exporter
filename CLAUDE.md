@@ -39,7 +39,7 @@ file. This repository is a fork of `eoleedi/TimeTree-Exporter`; see
 ```bash
 uv sync --dev                 # install everything (uv is the only supported tool)
 uv run ruff check             # lint
-uv run ruff format --check    # formatting (CI enforces it)
+uv run ruff format --check    # formatting (CI enforces it; also covers Python blocks in Markdown)
 uv run mypy                   # type-check timetree_exporter/
 uv run pytest                 # tests (141 at time of writing, < 1 s)
 uv run pytest --cov=timetree_exporter --cov-report=term-missing
@@ -66,7 +66,8 @@ before a push; CI runs them on Linux and Windows for Python 3.10 to 3.14.
 | `timetree_exporter/utils.py` | timestamps, VTIMEZONE bounding, password prompt |
 | `tests/` | pytest suite; fixtures in `tests/conftest.py` |
 | `examples/scheduled-export.yml` | GitHub Actions template for nightly exports |
-| `Dockerfile` | Container image (not built in CI) |
+| `.github/workflows/docker-publish.yml` | Builds the image on PRs, pushes to GHCR on `main` and tags |
+| `Dockerfile`, `compose.yaml`, `.env.example` | Container image (built and smoke-tested in CI, published to GHCR from `main`) |
 | `docs/` | Architecture and handover notes |
 
 ## Conventions worth knowing

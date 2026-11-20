@@ -151,12 +151,38 @@ Exit codes: `0` success, `1` export or network failure, `2` authentication failu
 
 ### Docker
 
+A ready-made image is published to GitHub Container Registry by CI for every push to `main`
+(`latest`) and for version tags. It supports `linux/amd64` and `linux/arm64`, so it also runs on
+a Raspberry Pi or an ARM server.
+
 ```bash
-docker build -t timetree-exporter .
-docker run --rm -it \
+docker pull ghcr.io/machaj25/timetree-exporter:latest
+docker run --rm \
   -e TIMETREE_EMAIL=email@example.com -e TIMETREE_PASSWORD=password \
   -v "$PWD/export:/export" \
-  timetree-exporter -c calendar_code -o /export/timetree.ics --sync-state /export/sync.json
+  ghcr.io/machaj25/timetree-exporter -c calendar_code -o /export/timetree.ics --sync-state /export/sync.json
+```
+
+Add `-it` to be prompted for the password or to pick a calendar interactively, and use
+`TIMETREE_SESSION_ID` instead of the email and password to keep the password out of the
+container. Everything the tool writes (the `.ics`, images, sync state) goes to `/export`, so
+mount a host directory there.
+
+With Docker Compose:
+
+```bash
+cp .env.example .env   # fill in credentials and TIMETREE_CALENDAR_CODE
+docker compose run --rm export
+```
+
+`compose.yaml` mounts `./export`, reads `.env`, and keeps the sync state so repeated runs only
+fetch changes. Append options to override the command, e.g.
+`docker compose run --rm export --from 2024-01-01`.
+
+To build the image yourself instead of pulling it:
+
+```bash
+docker build -t timetree-exporter .
 ```
 
 ### Scheduled exports
