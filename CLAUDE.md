@@ -39,7 +39,7 @@ file. This repository is a fork of `eoleedi/TimeTree-Exporter`; see
 ```bash
 uv sync --dev                 # install everything (uv is the only supported tool)
 uv run ruff check             # lint
-uv run ruff format --check    # formatting (CI enforces it)
+uv run ruff format --check    # formatting (CI enforces it; also covers Python blocks in Markdown)
 uv run mypy                   # type-check timetree_exporter/
 uv run pytest                 # tests (141 at time of writing, < 1 s)
 uv run pytest --cov=timetree_exporter --cov-report=term-missing

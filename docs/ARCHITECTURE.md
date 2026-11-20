@@ -89,9 +89,9 @@ returns:
 ```python
 @dataclass
 class EventPage:
-    events: list[dict]        # active events, deactivated ones removed
+    events: list[dict]  # active events, deactivated ones removed
     deleted_uuids: list[str]  # uuids of events with deactivated_at set
-    since: int | None         # last cursor returned by the server
+    since: int | None  # last cursor returned by the server
 ```
 
 `get_events()` is the full-fetch convenience that returns `page.events`;
