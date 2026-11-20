@@ -13,3 +13,8 @@ raw-timetree*
 *.ics
 .coverage
 .env
+export/
+docs
+examples
+compose.yaml
+.env.example

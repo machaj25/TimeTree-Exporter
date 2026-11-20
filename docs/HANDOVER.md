@@ -41,7 +41,8 @@ parts of them. Two policy conflicts will recur on every sync:
 | 2026-10-22 | `728787f` (PR #1) | `uv lock --upgrade`; fixed advisories in urllib3 2.7.0 and certifi 2026.5.20. |
 | 2026-10-22 | `f0e01a2` (PR #2) | Hardening and features, see below. |
 | 2026-10-22 | `a89133f` (PR #2) | English-only repository. |
-| 2026-11-03 | this change | Documentation for handover (`CLAUDE.md`, `docs/`). |
+| 2026-11-03 | `55d8b67` (PR #3) | Documentation for handover (`CLAUDE.md`, `docs/`). |
+| 2026-11-20 | this change | Docker: CI-built multi-arch image on GHCR, `compose.yaml`, `.env.example`. |
 
 ### Security review that started the work
 
@@ -117,17 +118,23 @@ These are the first things to check with real credentials.
    - that deleted events really arrive with `deactivated_at` on incremental
      fetches;
    - that `attendees` on private events is a list of user ids.
-2. **Docker image build.** No Docker daemon was available; the wheel build
-   and install steps that the Dockerfile performs were verified separately.
+2. **Docker image build on a local daemon.** No Docker daemon was available
+   in the development environment. The exact `pip wheel` / `pip install`
+   steps from the Dockerfile were replayed in clean virtualenvs and the CLI
+   ran, and `docker-publish.yml` builds and smoke-tests the image in CI on
+   every push and PR. Check that workflow's first run on GitHub; if it is
+   green, the image is verified.
 3. **Windows.** CI runs the suite on Windows, but the author did not. The
    sync state uses `Path.replace`, which is fine on Windows; image paths are
    escaped for Windows-reserved names.
 4. **GitHub Actions in the fork.** `release-please.yml` needs
    `MY_RELEASE_PLEASE_TOKEN` and will fail on every push to `main` in the
    fork; `python-publish.yml` and `bump-homebrew-formula.yml` need the PyPI
-   trusted-publisher setup and `HOMEBREW_FORMULA_TOKEN`. Only
-   `lint-and-test.yml` is expected to be green. Disable the others in the
-   fork's Actions settings or add the secrets if you want releases.
+   trusted-publisher setup and `HOMEBREW_FORMULA_TOKEN`. `lint-and-test.yml`
+   and `docker-publish.yml` are expected to be green (the latter needs only
+   `GITHUB_TOKEN`). Disable the others in the fork's Actions settings or add
+   the secrets if you want releases. The GHCR package is private until made
+   public in the repository's Packages settings.
 
 ## Known limitations and risks
 

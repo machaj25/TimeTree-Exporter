@@ -66,7 +66,8 @@ before a push; CI runs them on Linux and Windows for Python 3.10 to 3.14.
 | `timetree_exporter/utils.py` | timestamps, VTIMEZONE bounding, password prompt |
 | `tests/` | pytest suite; fixtures in `tests/conftest.py` |
 | `examples/scheduled-export.yml` | GitHub Actions template for nightly exports |
-| `Dockerfile` | Container image (not built in CI) |
+| `.github/workflows/docker-publish.yml` | Builds the image on PRs, pushes to GHCR on `main` and tags |
+| `Dockerfile`, `compose.yaml`, `.env.example` | Container image (built and smoke-tested in CI, published to GHCR from `main`) |
 | `docs/` | Architecture and handover notes |
 
 ## Conventions worth knowing

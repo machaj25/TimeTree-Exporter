@@ -1,0 +1,28 @@
+# Docker Compose setup for TimeTree Exporter.
+#
+#   cp .env.example .env        # fill in credentials and calendar code
+#   docker compose run --rm export
+#
+# The .ics file, images and the sync state land in ./export on the host.
+# Run `docker compose run --rm -it export` (without -c in .env) to pick a
+# calendar interactively. Override the command to pass other options:
+#   docker compose run --rm export --from 2024-01-01 --to 2024-12-31
+services:
+  export:
+    image: ghcr.io/machaj25/timetree-exporter:latest
+    # Uncomment to build from this checkout instead of pulling the image:
+    # build: .
+    env_file:
+      - .env
+    volumes:
+      - ./export:/export
+    # Needed for the password prompt and the interactive calendar picker.
+    stdin_open: true
+    tty: true
+    command:
+      - -c
+      - ${TIMETREE_CALENDAR_CODE:?set TIMETREE_CALENDAR_CODE in .env}
+      - -o
+      - /export/timetree.ics
+      - --sync-state
+      - /export/sync.json

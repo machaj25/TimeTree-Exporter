@@ -24,3 +24,6 @@ timetree-sync.json
 raw-timetree*/
 
 .env
+
+# Docker Compose local config
+export/

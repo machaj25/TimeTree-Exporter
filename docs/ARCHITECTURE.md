@@ -272,3 +272,9 @@ Interactive calendar selection accepts `1`, `1,3` or `all`.
   `HANDOVER.md`).
 - `Dockerfile` builds a wheel in a builder stage and installs it into a
   slim runtime image running as a non-root user with `/export` as the volume.
+  `.github/workflows/docker-publish.yml` builds it for `linux/amd64` and
+  `linux/arm64` on every push and PR, smoke-tests the amd64 image
+  (`--version`, `--help`, usage-error exit code 3), and pushes to
+  `ghcr.io/<owner>/timetree-exporter` for `main` (`latest`) and `v*` tags.
+  It needs only `GITHUB_TOKEN`. `compose.yaml` plus `.env.example` give a
+  one-command local setup with the sync state kept in `./export`.
